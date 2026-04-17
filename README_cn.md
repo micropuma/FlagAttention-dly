@@ -80,6 +80,12 @@ python -m build --no-isolation
 pip install dist/flag_attn-xxx.whl
 ```
 
+> 注意：flashattn的benchmark中也对比了TriDao的官方flashattention实现，用户需要自行编译构建原版flashattn。
+
+```shell
+MAX_JOBS=64 pip install flash-attn
+```
+
 ## 使用方式
 
 FlagAttention 提供了自定义的 attention 算子。当一个算子的功能和 torch 函数等价的时候，就可以用它替换对应的 torch 函数。

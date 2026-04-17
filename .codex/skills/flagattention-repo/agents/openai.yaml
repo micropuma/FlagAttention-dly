@@ -1,0 +1,4 @@
+interface:
+  display_name: "FlagAttention 仓库"
+  short_description: "用中文分析和维护 FlagAttention Triton attention 算子仓库"
+  default_prompt: "先阅读仓库根目录的 agent.md，再按 flash、piecewise、paged 或文档/benchmark 相关任务定位到对应源码、reference、测试和示例，用中文输出高信号结论。"
