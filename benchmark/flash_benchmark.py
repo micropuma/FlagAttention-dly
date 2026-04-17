@@ -1,3 +1,4 @@
+import argparse
 import math
 import datetime
 import logging
@@ -20,17 +21,32 @@ except BaseException:
 HAS_FLASH = FLASH_VER is not None
 
 
+def _parse_cli_args():
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument(
+        "--bench-mode",
+        choices=["all", "fwd", "bwd"],
+        default="all",
+        help="Run only forward benchmarks, only backward benchmarks, or both.",
+    )
+    return parser.parse_known_args()[0]
+
+
+_CLI_ARGS = _parse_cli_args()
+_BENCH_MODES = ["fwd", "bwd"] if _CLI_ARGS.bench_mode == "all" else [_CLI_ARGS.bench_mode]
+
+
 configs = [triton.testing.Benchmark(
     x_names=['N_CTX'],
     x_vals=[2**i for i in range(9, 16)],
     line_arg='provider',
-    line_vals=['flag_attn', 'torch', ] + (['flash'] if HAS_FLASH else []),
-    line_names=['flag_attn', 'torch', ] + ([f'flash-{FLASH_VER}'] if HAS_FLASH else []),
+    line_vals=['flag_attn', 'naive', 'torch', ] + (['flash'] if HAS_FLASH else []),
+    line_names=['flag_attn', 'naive-triton', 'torch', ] + ([f'flash-{FLASH_VER}'] if HAS_FLASH else []),
     styles=[('red', '-'), ('green', '-'), ('blue', '-'), ('cyan', '-')],
     ylabel='tflop/s',
     plot_name=f'attention_d-{D_HEAD}_mode-{mode}_causal-{causal}_dtype-{dtype}',
     args={'D_HEAD': D_HEAD, 'dtype': dtype, 'mode': mode, 'causal': causal}
-) for mode in ['fwd', 'bwd'] 
+) for mode in _BENCH_MODES
     for causal in [False, True]
     for D_HEAD in [64, 128]
     for dtype in [torch.float16, torch.bfloat16]]
@@ -41,6 +57,7 @@ def bench_flash_attention(N_CTX, D_HEAD, causal, mode, provider, dtype=torch.flo
     w = N_CTX // 2 # dist thresold
     warmup = 25
     rep = 100
+    sm_scale = 1.0 / math.sqrt(D_HEAD)
 
     is_bwd = mode == "bwd"
 
@@ -56,6 +73,19 @@ def bench_flash_attention(N_CTX, D_HEAD, causal, mode, provider, dtype=torch.flo
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+    if provider == "naive":
+        q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=is_bwd)
+        k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=is_bwd)
+        v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=is_bwd)
+        if mode == "bwd":
+            logging.info(
+                "naive_attention has no backward implementation; reporting 0 TFLOP/s for "
+                f"batch_size={BATCH}, num_heads={H}, seqlen={N_CTX}, headdim={D_HEAD}, dtype={dtype}"
+            )
+            ms = float("inf")
+        else:
+            fn = lambda: flag_attn.naive_attention(q, k, v, sm_scale, causal)
+            ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
     if provider == "torch":
         q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=is_bwd)
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="cuda", requires_grad=is_bwd)
