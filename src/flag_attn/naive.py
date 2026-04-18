@@ -4,38 +4,44 @@ import torch
 import triton
 import triton.language as tl
 
-__all__ = ["Attention", "attention", "DEVICE"]
+__all__ = ["Attention", "attention", "DEVICE", "get_fwd_config"]
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# NOTE: this function can be overwritten at runtime to use your custom config.
+def get_fwd_config(B, H, M, N, D, causal):
+    if torch.cuda.get_device_capability() == (8, 0):
+        if not causal:
+            if D <= 64:
+                block_m, block_n, num_stages, num_warps = 128, 64, 3, 4
+            else:
+                if M <= 1024:
+                    block_m, block_n, num_stages, num_warps = 128, 32, 3, 4
+                else:
+                    block_m, block_n, num_stages, num_warps = 128, 128, 3, 8
+        else:
+            if D <= 64:
+                block_m, block_n, num_stages, num_warps = 128, 64, 4, 4
+            else:
+                if M <= 1024:
+                    block_m, block_n, num_stages, num_warps = 128, 32, 2, 4
+                else:
+                    block_m, block_n, num_stages, num_warps = 128, 128, 3, 8
+    elif torch.cuda.get_device_capability() == (8, 6):
+        if not causal:
+            if D <= 64:
+                block_m, block_n, num_stages, num_warps = 128, 64, 3, 4
+            else:
+                block_m, block_n, num_stages, num_warps = 128, 32, 2, 4
+        else:
+            if D <= 64:
+                block_m, block_n, num_stages, num_warps = 64, 64, 3, 4
+            else:
+                block_m, block_n, num_stages, num_warps = 128, 32, 2, 4
+    else:
+        block_m, block_n, num_stages, num_warps = 32, 32, 1, 4
 
-def _prune_config(configs, name_args, **kwargs):
-    """
-    Filter illegal configs.
-
-    Constraints:
-    1. BLOCK_M <= SEQ_LEN
-    2. BLOCK_M >= BLOCK_N in causal mode
-    """
-
-    stage = kwargs["stage"]
-    seq_len = kwargs["SEQ_LEN"]
-
-    return [
-        config for config in configs
-        if config.kwargs["B_r"] <= seq_len and (
-            stage == 1 or config.kwargs["B_r"] >= config.kwargs["B_c"]
-        )
-    ]
-
-
-_AUTO_CONFIG = [
-    triton.Config({"B_r": br, "B_c": bc}, num_stages=s, num_warps=w)
-    for br in [32, 64, 128]
-    for bc in [32, 64]
-    for s in [1, 2, 3]
-    for w in [4, 8]
-]
+    return block_m, block_n, num_stages, num_warps
 
 @triton.jit
 def _flash_attn_inner(
@@ -110,8 +116,6 @@ def _flash_attn_inner(
 
     return acc, m_i, l_i
 
-
-@triton.autotune(configs=_AUTO_CONFIG, key=["SEQ_LEN", "HEAD_DIM"], prune_configs_by={"early_config_prune": _prune_config})
 @triton.jit
 def _flash_attn_impl(
     q, k, v, o, lse,      # lse用于backward pass
@@ -213,11 +217,17 @@ class Attention(torch.autograd.Function):
             device=DEVICE,
             dtype=torch.float32,
         )
-        
-        grid = lambda Meta: (
-            triton.cdiv(seq_len, Meta["B_r"]),
-            batch * head_num,
+
+        block_m, block_n, num_stages, num_warps = get_fwd_config(
+            batch,
+            head_num,
+            seq_len,
+            seq_len,
+            head_dim,
+            causal,
         )
+
+        grid = (triton.cdiv(seq_len, block_m), batch * head_num)
 
         _flash_attn_impl[grid](
             q, k, v, o, lse,
@@ -226,7 +236,11 @@ class Attention(torch.autograd.Function):
             HEAD_NUM=head_num,
             SEQ_LEN=seq_len,
             HEAD_DIM=head_dim,
+            B_r=block_m,
+            B_c=block_n,
             stage=3 if causal else 1,
+            num_stages=num_stages,
+            num_warps=num_warps,
         )
 
         ctx.save_for_backward(q, k, v, o, lse)
