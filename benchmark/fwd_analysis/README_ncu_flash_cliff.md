@@ -6,7 +6,7 @@ This workflow profiles forward-kernel cliff points for `flag_attn` and `naive`, 
 - `.details.txt` with both section headers and section bodies
 - `.raw.csv` for metric slicing or diffing
 
-By default the runner now uses `ncu --set full`, so the generated report keeps the
+By default the runner uses `ncu --set full`, so the generated report keeps the
 full Nsight Compute section set instead of a hand-picked subset.
 
 ## Quick Start
@@ -51,6 +51,37 @@ Use the old lightweight section list when you want faster profiling:
 ```bash
 python run_flash_cliff_ncu.py \
   --targeted-sections
+```
+
+## Single Point Analysis
+
+Use `analyze_single_point.py` when you want to separate:
+
+- steady-state benchmark timing / TFLOP/s
+- lightweight Nsight Compute diagnostics for the same shape
+
+Benchmark only:
+
+```bash
+python analyze_single_point.py \
+  --preset d64-noncausal-cliff
+```
+
+Benchmark plus lightweight NCU:
+
+```bash
+python analyze_single_point.py \
+  --preset d64-noncausal-cliff \
+  --run-ncu
+```
+
+Use full Nsight Compute collection for the same single point:
+
+```bash
+python analyze_single_point.py \
+  --preset d64-noncausal-cliff \
+  --run-ncu \
+  --full-sections
 ```
 
 ## Open In UI

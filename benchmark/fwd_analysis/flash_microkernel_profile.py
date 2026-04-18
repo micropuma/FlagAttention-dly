@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument(
         "--provider",
         choices=["flag_attn", "naive"],
-        required=True,
+        default=None,
         help="Implementation to profile.",
     )
     parser.add_argument(
@@ -178,6 +178,9 @@ def main():
                 f"d_head={preset['d_head']} causal={preset['causal']}"
             )
         return
+
+    if args.provider is None:
+        raise ValueError("--provider is required unless --list-presets is used.")
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required.")
